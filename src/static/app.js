@@ -2,7 +2,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitiesList = document.getElementById("activities-list");
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
+  const loginForm = document.getElementById("login-form");
+  const loginContainer = document.getElementById("login-container");
+  const signupArea = document.getElementById("signup-area");
+  const authStatus = document.getElementById("auth-status");
+  const logoutButton = document.getElementById("logout-button");
   const messageDiv = document.getElementById("message");
+  let currentUser = null;
+
+  function updateAuthState(user) {
+    currentUser = user;
+    const signedIn = Boolean(user);
+    authStatus.textContent = signedIn
+      ? `Signed in as ${user.username} (${user.role})`
+      : "Not signed in";
+    loginContainer.classList.toggle("hidden", signedIn);
+    signupArea.classList.toggle("hidden", !signedIn || user.role !== "student");
+    logoutButton.classList.toggle("hidden", !signedIn);
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -28,10 +45,14 @@ document.addEventListener("DOMContentLoaded", () => {
               <h5>Participants:</h5>
               <ul class="participants-list">
                 ${details.participants
-                  .map(
-                    (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
-                  )
+                  .map((email) => {
+                    const canRemove = currentUser &&
+                      (currentUser.role === "admin" || currentUser.username === email);
+                    const removeButton = canRemove
+                      ? `<button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button>`
+                      : "";
+                    return `<li><span class="participant-email">${email}</span>${removeButton}</li>`;
+                  })
                   .join("")}
               </ul>
             </div>`
@@ -77,7 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const response = await fetch(
         `/activities/${encodeURIComponent(
           activity
-        )}/unregister?email=${encodeURIComponent(email)}`,
+        )}/unregister?target_email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
         }
@@ -114,14 +135,11 @@ document.addEventListener("DOMContentLoaded", () => {
   signupForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const email = document.getElementById("email").value;
     const activity = document.getElementById("activity").value;
 
     try {
       const response = await fetch(
-        `/activities/${encodeURIComponent(
-          activity
-        )}/signup?email=${encodeURIComponent(email)}`,
+        `/activities/${encodeURIComponent(activity)}/signup`,
         {
           method: "POST",
         }
@@ -155,6 +173,37 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const response = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      messageDiv.textContent = result.detail || "Unable to sign in";
+      messageDiv.className = "error";
+      messageDiv.classList.remove("hidden");
+      return;
+    }
+    loginForm.reset();
+    updateAuthState(result);
+    fetchActivities();
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    await fetch("/logout", { method: "POST" });
+    updateAuthState(null);
+    fetchActivities();
+  });
+
   // Initialize app
-  fetchActivities();
+  fetch("/me")
+    .then((response) => (response.ok ? response.json() : null))
+    .then(updateAuthState)
+    .then(fetchActivities);
 });

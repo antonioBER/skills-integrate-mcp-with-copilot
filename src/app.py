@@ -5,14 +5,59 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+import hashlib
+import hmac
+import json
+import secrets
+from pathlib import Path
+
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
-from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+
+SESSION_COOKIE = "mergington_session"
+PASSWORD_ITERATIONS = 310_000
+sessions = {}
+security = HTTPBearer(auto_error=False)
+
+
+def load_users():
+    users_path = Path(__file__).with_name("users.json")
+    with users_path.open(encoding="utf-8") as users_file:
+        return json.load(users_file)
+
+
+users = load_users()
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def verify_password(password, encoded_hash):
+    salt_hex, expected_hash = encoded_hash.split("$", 1)
+    actual_hash = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), bytes.fromhex(salt_hex), PASSWORD_ITERATIONS
+    ).hex()
+    return hmac.compare_digest(actual_hash, expected_hash)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
+    token = credentials.credentials if credentials else session_cookie
+    username = sessions.get(token)
+    if not username or username not in users:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"username": username, **users[username]}
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -88,14 +133,44 @@ def get_activities():
     return activities
 
 
+@app.post("/login")
+def login(credentials: LoginRequest, response: Response):
+    user = users.get(credentials.username)
+    if not user or not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = secrets.token_urlsafe(32)
+    sessions[token] = credentials.username
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=False
+    )
+    return {"username": credentials.username, "role": user["role"]}
+
+
+@app.post("/logout")
+def logout(response: Response, session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+    if session_cookie:
+        sessions.pop(session_cookie, None)
+    response.delete_cookie(SESSION_COOKIE)
+    return {"message": "Logged out"}
+
+
+@app.get("/me")
+def current_user(user=Depends(get_current_user)):
+    return {"username": user["username"], "role": user["role"]}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, user=Depends(get_current_user)):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
 
-    # Get the specific activity
+    if user["role"] != "student":
+        raise HTTPException(status_code=403, detail="Only students can sign up")
+
+    email = user["username"]
     activity = activities[activity_name]
 
     # Validate student is not already signed up
@@ -111,13 +186,20 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    target_email: str | None = Query(default=None),
+    user=Depends(get_current_user),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
 
-    # Get the specific activity
+    if target_email and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only administrators can manage other students")
+
+    email = target_email or user["username"]
     activity = activities[activity_name]
 
     # Validate student is signed up

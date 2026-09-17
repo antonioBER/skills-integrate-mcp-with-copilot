@@ -5,7 +5,9 @@ A super simple FastAPI application that allows students to view and sign up for 
 ## Features
 
 - View all available extracurricular activities
-- Sign up for activities
+- Sign in with a student or administrator account
+- Sign up for activities as an authenticated student
+- Unregister your own activities as a student
 
 ## Getting Started
 
@@ -18,7 +20,7 @@ A super simple FastAPI application that allows students to view and sign up for 
 2. Run the application:
 
    ```
-   python app.py
+   uvicorn app:app --reload
    ```
 
 3. Open your browser and go to:
@@ -30,7 +32,11 @@ A super simple FastAPI application that allows students to view and sign up for 
 | Method | Endpoint                                                          | Description                                                         |
 | ------ | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
 | GET    | `/activities`                                                     | Get all activities with their details and current participant count |
-| POST   | `/activities/{activity_name}/signup?email=student@mergington.edu` | Sign up for an activity                                             |
+| POST   | `/login`                                                            | Create an authenticated session                                     |
+| POST   | `/logout`                                                           | End the current session                                             |
+| GET    | `/me`                                                               | Get the current user and role                                       |
+| POST   | `/activities/{activity_name}/signup`                               | Sign up the authenticated student                                   |
+| DELETE | `/activities/{activity_name}/unregister`                           | Unregister the authenticated student                                |
 
 ## Data Model
 
@@ -47,4 +53,9 @@ The application uses a simple data model with meaningful identifiers:
    - Name
    - Grade level
 
-All data is stored in memory, which means data will be reset when the server restarts.
+Activities, sessions, and registration changes are stored in memory, which means they will be reset when the server restarts. User passwords are stored as salted PBKDF2 hashes in `users.json`, never as plaintext.
+
+Development accounts:
+
+- `admin@mergington.edu` / `admin-demo-password`
+- `student@mergington.edu` / `student-demo-password`
